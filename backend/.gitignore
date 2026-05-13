@@ -1,0 +1,17 @@
+node_modules/
+.env
+.env.local
+.env.production
+*.log
+logs/
+uploads/avatars/*
+uploads/logos/*
+uploads/receipts/*
+uploads/members/*
+!uploads/.gitkeep
+.DS_Store
+coverage/
+dist/
+*.swp
+.idea/
+.vscode/
