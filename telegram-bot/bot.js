@@ -1,102 +1,26 @@
 /**
- * GymFlow Telegram Remote Controller
- * Envoie des commandes depuis ton téléphone → le bot les exécute sur le serveur
+ * GymFlow Telegram Remote Controller — version intelligente
+ * Comprend le français, le darija et l'anglais
  */
 const TelegramBot = require('node-telegram-bot-api');
 const { spawn } = require('child_process');
 const path = require('path');
-const fs = require('fs');
 
 const TOKEN = process.env.TELEGRAM_TOKEN;
-const ALLOWED_CHAT_ID = process.env.TELEGRAM_CHAT_ID ? parseInt(process.env.TELEGRAM_CHAT_ID) : null;
-const ROOT = path.join(__dirname, '..');
-
-if (!TOKEN) {
-  console.error('❌ TELEGRAM_TOKEN manquant. Lance avec: TELEGRAM_TOKEN=xxx node bot.js');
-  process.exit(1);
-}
+if (!TOKEN) { console.error('❌ TELEGRAM_TOKEN manquant'); process.exit(1); }
 
 const bot = new TelegramBot(TOKEN, { polling: true });
+const ROOT = path.join(__dirname, '..');
 const procs = {};
 
-// Security: only allow authorized chat
-function isAuthorized(chatId) {
-  if (!ALLOWED_CHAT_ID) return true; // open mode until first message sets it
-  return chatId === ALLOWED_CHAT_ID;
-}
+// ─── Keyboard ────────────────────────────────────────────────────────────────
 
-function escapeMarkdown(text) {
-  return text.replace(/[_*[\]()~`>#+\-=|{}.!]/g, '\\$&');
-}
-
-async function sendChunked(chatId, text, options = {}) {
-  const MAX = 4000;
-  const clean = text.replace(/\x1b\[[0-9;]*m/g, '').trim();
-  if (!clean) return;
-  for (let i = 0; i < clean.length; i += MAX) {
-    await bot.sendMessage(chatId, '`' + clean.slice(i, i + MAX) + '`', { parse_mode: 'MarkdownV2', ...options }).catch(() =>
-      bot.sendMessage(chatId, clean.slice(i, i + MAX))
-    );
-  }
-}
-
-function runCommand(chatId, procId, cmd, cwd) {
-  if (procs[procId]) {
-    procs[procId].kill('SIGTERM');
-    delete procs[procId];
-  }
-
-  bot.sendMessage(chatId, `▶ *${escapeMarkdown(procId)}*: \`${escapeMarkdown(cmd)}\``, { parse_mode: 'MarkdownV2' });
-
-  const shell = spawn('bash', ['-c', cmd], {
-    cwd: cwd ? path.join(ROOT, cwd) : ROOT,
-    env: { ...process.env, FORCE_COLOR: '0' },
-  });
-
-  procs[procId] = shell;
-
-  let buffer = '';
-  let timer = null;
-
-  const flush = () => {
-    if (buffer.trim()) {
-      sendChunked(chatId, buffer);
-      buffer = '';
-    }
-  };
-
-  const collect = (data) => {
-    buffer += data.toString();
-    clearTimeout(timer);
-    timer = setTimeout(flush, 800);
-  };
-
-  shell.stdout.on('data', collect);
-  shell.stderr.on('data', collect);
-
-  shell.on('close', (code) => {
-    clearTimeout(timer);
-    flush();
-    setTimeout(() => {
-      bot.sendMessage(chatId, code === 0 ? '✅ Terminé avec succès' : `❌ Exit ${code}`);
-      delete procs[procId];
-    }, 1000);
-  });
-
-  shell.on('error', (e) => {
-    bot.sendMessage(chatId, `❌ Erreur: ${e.message}`);
-    delete procs[procId];
-  });
-}
-
-// ─── Keyboard menus ─────────────────────────────────────────────────────────
-
-const MAIN_MENU = {
+const KEYBOARD = {
   reply_markup: {
     keyboard: [
       ['⚡ Start Frontend', '🔧 Start Backend'],
       ['⛔ Stop Frontend', '⛔ Stop Backend'],
-      ['🛑 Stop Tout', '📊 Processus actifs'],
+      ['🛑 Stop Tout', '📊 Status'],
       ['🗄️ Sync DB', '🌱 Seed DB'],
       ['📋 Git Status', '📜 Git Log'],
       ['⬇️ Git Pull', '🔍 Git Diff'],
@@ -106,145 +30,229 @@ const MAIN_MENU = {
   },
 };
 
-const HELP_TEXT = `🎮 *GymFlow Remote Controller*
+// ─── Intent detection ────────────────────────────────────────────────────────
 
-*Serveurs:*
-⚡ Start Frontend — lance Vite dev server
-🔧 Start Backend — lance Node.js backend
-⛔ Stop Frontend/Backend — arrête le serveur
-🛑 Stop Tout — kill tous les processus
+function detectIntent(text) {
+  const t = text.toLowerCase().trim();
 
-*Base de données:*
-🗄️ Sync DB — synchronise les modèles
-🌱 Seed DB — insère les données de test
-💥 Reset DB — /resetdb (demande confirmation)
+  // Greetings
+  if (/^(salut|hello|hi|salam|bonjour|ola|hey|cava|ça va|كيداير|labas)/.test(t))
+    return 'greeting';
 
-*Git:*
-📋 Git Status, 📜 Git Log, ⬇️ Git Pull, 🔍 Git Diff
+  // Start frontend
+  if (/(start|lance|dkhl|ftech|ouvre|open|démarre|شغل).*(front|site|web|vite|ui|interface)/.test(t) ||
+      /(front|site|web|vite).*(start|lance|dkhl|run|شغل)/.test(t) ||
+      t === 'frontend' || t === 'start frontend' || t === '⚡ start frontend')
+    return 'start_frontend';
 
-*Commandes libres:*
-Tape n'importe quelle commande shell, ex:
-\`ls backend/src\`
-\`cat backend/.env\`
-\`cd frontend && npm run build\`
+  // Start backend
+  if (/(start|lance|dkhl|ftech|démarre|شغل).*(back|server|api|node|serveur)/.test(t) ||
+      /(back|server|api|node).*(start|lance|run|شغل)/.test(t) ||
+      t === 'backend' || t === 'start backend' || t === '🔧 start backend')
+    return 'start_backend';
 
-*Process:*
-/kill <id> — stoppe un processus spécifique
-/procs — liste les processus actifs`;
+  // Start both
+  if (/(start|lance|démarre|شغل).*(tout|all|les deux|كلشي)/.test(t) ||
+      /(tout|all|كلشي).*(start|lance|شغل)/.test(t))
+    return 'start_all';
+
+  // Stop frontend
+  if (/(stop|wqef|arret|kill|arrête|وقف).*(front|site|web|vite)/.test(t) ||
+      t === '⛔ stop frontend')
+    return 'stop_frontend';
+
+  // Stop backend
+  if (/(stop|wqef|arret|kill|arrête|وقف).*(back|server|api|node)/.test(t) ||
+      t === '⛔ stop backend')
+    return 'stop_backend';
+
+  // Stop all
+  if (/^(stop|wqef|arret|arrête|وقف)$/.test(t) ||
+      /(stop|wqef|arrête).*(tout|all|كلشي)/.test(t) ||
+      t === '🛑 stop tout')
+    return 'stop_all';
+
+  // Status
+  if (/(status|état|statut|حال|kif|kifash|running|actif|marche)/.test(t) ||
+      t === '📊 status')
+    return 'status';
+
+  // Git status
+  if (/(git status|git stat|changes|modif)/.test(t) || t === '📋 git status')
+    return 'git_status';
+
+  // Git log
+  if (/(git log|historique|commits|log)/.test(t) || t === '📜 git log')
+    return 'git_log';
+
+  // Git pull
+  if (/(git pull|pull|sync|synchronis|mise.?à.?jour|update)/.test(t) || t === '⬇️ git pull')
+    return 'git_pull';
+
+  // Git diff
+  if (/(git diff|diff|differences|changements)/.test(t) || t === '🔍 git diff')
+    return 'git_diff';
+
+  // DB sync
+  if (/(sync.?db|db.?sync|synchronis.*base|base.*sync)/.test(t) || t === '🗄️ sync db')
+    return 'db_sync';
+
+  // DB seed
+  if (/(seed|données.?test|fake.?data|data.*seed)/.test(t) || t === '🌱 seed db')
+    return 'db_seed';
+
+  // DB reset
+  if (/(reset.?db|db.?reset|supprime.*base|recré.*base)/.test(t))
+    return 'db_reset';
+
+  // Help
+  if (/(aide|help|quoi|comment|commandes|menu|كيفاش|shniya|شنية)/.test(t) || t === '❓ aide')
+    return 'help';
+
+  // Logs
+  if (/(log|sortie|output|affiche|montre|show)/.test(t))
+    return 'show_logs';
+
+  return 'unknown';
+}
+
+// ─── Run shell command ────────────────────────────────────────────────────────
+
+function runCommand(chatId, procId, cmd, cwd) {
+  if (procs[procId]) { procs[procId].kill('SIGTERM'); delete procs[procId]; }
+
+  bot.sendMessage(chatId, `▶ *${procId}*`, { parse_mode: 'Markdown', ...KEYBOARD.reply_markup ? { reply_markup: KEYBOARD.reply_markup } : {} });
+
+  const shell = spawn('bash', ['-c', cmd], {
+    cwd: cwd ? path.join(ROOT, cwd) : ROOT,
+    env: { ...process.env, FORCE_COLOR: '0' },
+  });
+  procs[procId] = shell;
+
+  let buffer = '';
+  let timer = null;
+
+  const flush = () => {
+    const clean = buffer.replace(/\x1b\[[0-9;]*m/g, '').trim();
+    if (clean) bot.sendMessage(chatId, '```\n' + clean.slice(0, 3800) + '\n```', { parse_mode: 'Markdown', reply_markup: KEYBOARD.reply_markup });
+    buffer = '';
+  };
+
+  const collect = (d) => {
+    buffer += d.toString();
+    clearTimeout(timer);
+    timer = setTimeout(flush, 900);
+  };
+
+  shell.stdout.on('data', collect);
+  shell.stderr.on('data', collect);
+  shell.on('close', (code) => {
+    clearTimeout(timer);
+    flush();
+    setTimeout(() => {
+      bot.sendMessage(chatId, code === 0 ? '✅ Terminé !' : `❌ Erreur (exit ${code})`, { reply_markup: KEYBOARD.reply_markup });
+      delete procs[procId];
+    }, 1000);
+  });
+}
 
 // ─── Message handler ─────────────────────────────────────────────────────────
 
-bot.on('message', async (msg) => {
+bot.on('message', (msg) => {
   const chatId = msg.chat.id;
-  const text = (msg.text || '').trim();
+  const text = msg.text || '';
+  const intent = detectIntent(text);
 
-  // Auto-save first chat ID if not set
-  if (!ALLOWED_CHAT_ID) {
-    const envPath = path.join(__dirname, '.env');
-    const envLine = `TELEGRAM_CHAT_ID=${chatId}\n`;
-    fs.appendFileSync(envPath, envLine);
-    console.log(`✅ Chat ID ${chatId} sauvegardé dans .env`);
-  }
+  const reply = (t) => bot.sendMessage(chatId, t, KEYBOARD);
 
-  if (!isAuthorized(chatId)) {
-    bot.sendMessage(chatId, '⛔ Non autorisé.');
-    return;
-  }
+  switch (intent) {
 
-  const send = (t) => bot.sendMessage(chatId, t, MAIN_MENU);
+    case 'greeting':
+      reply(`👋 Salut ! Je suis le remote controller de GymFlow.\n\nUtilise les boutons en bas, ou écris par exemple :\n• "lance le site"\n• "stop tout"\n• "git status"\n• "sync db"`);
+      break;
 
-  // ── Boutons du menu ──
-  switch (text) {
-    case '/start':
-    case '❓ Aide':
-      bot.sendMessage(chatId, HELP_TEXT, { parse_mode: 'MarkdownV2', ...MAIN_MENU.reply_markup ? { reply_markup: MAIN_MENU.reply_markup } : {} });
-      return;
-
-    case '⚡ Start Frontend':
+    case 'start_frontend':
       runCommand(chatId, 'frontend', 'cd frontend && npm run dev -- --host 0.0.0.0 --port 5173', '');
-      return;
+      break;
 
-    case '🔧 Start Backend':
+    case 'start_backend':
       runCommand(chatId, 'backend', 'cd backend && npm run dev', '');
-      return;
+      break;
 
-    case '⛔ Stop Frontend':
+    case 'start_all':
+      runCommand(chatId, 'frontend', 'cd frontend && npm run dev -- --host 0.0.0.0 --port 5173', '');
+      setTimeout(() => runCommand(chatId, 'backend', 'cd backend && npm run dev', ''), 2000);
+      break;
+
+    case 'stop_frontend':
       if (procs['frontend']) { procs['frontend'].kill('SIGTERM'); delete procs['frontend']; }
-      send('🛑 Frontend arrêté');
-      return;
+      reply('⛔ Frontend arrêté');
+      break;
 
-    case '⛔ Stop Backend':
+    case 'stop_backend':
       if (procs['backend']) { procs['backend'].kill('SIGTERM'); delete procs['backend']; }
-      send('🛑 Backend arrêté');
-      return;
+      reply('⛔ Backend arrêté');
+      break;
 
-    case '🛑 Stop Tout':
-      Object.keys(procs).forEach((k) => { procs[k].kill('SIGTERM'); delete procs[k]; });
-      send('🛑 Tous les processus arrêtés');
-      return;
+    case 'stop_all':
+      Object.keys(procs).forEach(k => { procs[k].kill('SIGTERM'); delete procs[k]; });
+      reply('🛑 Tout arrêté');
+      break;
 
-    case '📊 Processus actifs': {
+    case 'status': {
       const running = Object.keys(procs);
-      send(running.length ? `⚡ Actifs: ${running.join(', ')}` : 'Aucun processus en cours');
-      return;
+      reply(running.length ? `⚡ En cours : ${running.join(', ')}` : '😴 Aucun processus actif');
+      break;
     }
 
-    case '🗄️ Sync DB':
-      runCommand(chatId, 'db-sync', 'cd backend && npm run db:sync', '');
-      return;
-
-    case '🌱 Seed DB':
-      runCommand(chatId, 'db-seed', 'cd backend && npm run db:seed', '');
-      return;
-
-    case '📋 Git Status':
+    case 'git_status':
       runCommand(chatId, 'git', 'git status', '');
-      return;
+      break;
 
-    case '📜 Git Log':
+    case 'git_log':
       runCommand(chatId, 'git', 'git log --oneline -15', '');
-      return;
+      break;
 
-    case '⬇️ Git Pull':
+    case 'git_pull':
       runCommand(chatId, 'git', 'git pull origin claude/check-website-K7ljp', '');
-      return;
+      break;
 
-    case '🔍 Git Diff':
+    case 'git_diff':
       runCommand(chatId, 'git', 'git diff --stat', '');
-      return;
-  }
+      break;
 
-  // ── Commandes slash ──
-  if (text.startsWith('/kill ')) {
-    const id = text.slice(6).trim();
-    if (procs[id]) { procs[id].kill('SIGTERM'); delete procs[id]; send(`🛑 ${id} arrêté`); }
-    else send(`Processus "${id}" introuvable`);
-    return;
-  }
+    case 'db_sync':
+      runCommand(chatId, 'db-sync', 'cd backend && npm run db:sync', '');
+      break;
 
-  if (text === '/procs') {
-    const running = Object.keys(procs);
-    send(running.length ? `⚡ Actifs: ${running.join(', ')}` : 'Aucun processus en cours');
-    return;
-  }
+    case 'db_seed':
+      runCommand(chatId, 'db-seed', 'cd backend && npm run db:seed', '');
+      break;
 
-  if (text === '/resetdb') {
-    runCommand(chatId, 'db-reset', 'cd backend && npm run db:reset', '');
-    return;
-  }
+    case 'db_reset':
+      reply('⚠️ Tu es sûr ? Réponds "oui reset db" pour confirmer');
+      break;
 
-  if (text.startsWith('/')) {
-    // ignore other slash commands
-    return;
-  }
+    case 'show_logs':
+      reply(Object.keys(procs).length
+        ? `📊 Processus actifs : ${Object.keys(procs).join(', ')}\nLes logs arrivent en temps réel dans ce chat.`
+        : '😴 Aucun processus actif. Lance un serveur d\'abord.');
+      break;
 
-  // ── Commande shell libre ──
-  runCommand(chatId, 'custom-' + Date.now(), text, '');
+    case 'help':
+      reply(`🎮 *GymFlow Remote*\n\n*Boutons disponibles :*\n⚡ Start Frontend — lance le site web\n🔧 Start Backend — lance l'API\n⛔ Stop — arrête un serveur\n🛑 Stop Tout — tout arrêter\n📊 Status — processus actifs\n🗄️ Sync DB — sync base de données\n🌱 Seed DB — données de test\n📋 Git Status / Log / Pull / Diff\n\n*Ou écris en français/darija :*\n"lance le site", "stop tout", "sync db", "git pull"...`);
+      break;
+
+    default:
+      // Commande spéciale confirmée
+      if (text.toLowerCase() === 'oui reset db') {
+        runCommand(chatId, 'db-reset', 'cd backend && npm run db:reset', '');
+        return;
+      }
+      reply(`🤔 Je n'ai pas compris "${text}".\n\nEssaie les boutons du menu, ou écris :\n• "lance le site"\n• "stop tout"\n• "git status"\n• "aide" pour la liste complète`);
+  }
 });
 
-bot.on('polling_error', (err) => {
-  console.error('Polling error:', err.message);
-});
+bot.on('polling_error', (err) => console.error('Polling error:', err.message));
 
-console.log('\n🤖 GymFlow Telegram Bot démarré!');
-console.log('   Envoie /start à ton bot depuis Telegram\n');
+console.log('\n🤖 GymFlow Bot démarré — version intelligente\n');
