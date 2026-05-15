@@ -75,8 +75,29 @@ function detectIntent(text) {
   if (/(aide|help|commandes|menu|شنية|shniya)/.test(t) || t === '❓ aide') return 'help';
   if (/(salut|hello|salam|bonjour|hi|كيداير|labas)/.test(t)) return 'greeting';
 
+  // Common websites — direct
+  const sites = {
+    youtube: 'https://youtube.com',
+    'you tube': 'https://youtube.com',
+    google: 'https://google.com',
+    gmail: 'https://gmail.com',
+    facebook: 'https://facebook.com',
+    instagram: 'https://instagram.com',
+    twitter: 'https://twitter.com',
+    whatsapp: 'https://web.whatsapp.com',
+    netflix: 'https://netflix.com',
+    spotify: 'https://open.spotify.com',
+    github: 'https://github.com',
+    chatgpt: 'https://chat.openai.com',
+    claude: 'https://claude.ai',
+    maps: 'https://maps.google.com',
+  };
+  for (const [name, url] of Object.entries(sites)) {
+    if (t.includes(name)) return { type: 'open_url', url };
+  }
+
   // Open any app
-  const openMatch = t.match(/(?:ouvre|open|ftah|lance|start)\s+(.+)/);
+  const openMatch = t.match(/(?:ouvre|open|ftah|lance|start|mets|met|joue|va sur)\s+(.+)/);
   if (openMatch) return { type: 'open_app', app: openMatch[1] };
 
   // Write/type something
