@@ -75,6 +75,21 @@ function detectIntent(text) {
   if (/(aide|help|commandes|menu|شنية|shniya)/.test(t) || t === '❓ aide') return 'help';
   if (/(salut|hello|salam|bonjour|hi|كيداير|labas)/.test(t)) return 'greeting';
 
+  // Search queries
+  const googleSearch = t.match(/(?:cherche|search|googl[eo]|trouve|ftah|بحث)\s+(?:sur\s+google\s+)?(.+)/);
+  if (googleSearch && !t.includes('youtube') && !t.includes('spotify')) {
+    const q = encodeURIComponent(googleSearch[1].replace(/^(sur\s+google|dans\s+google)\s*/i, ''));
+    return { type: 'open_url', url: `https://www.google.com/search?q=${q}` };
+  }
+
+  const ytSearch = t.match(/(?:cherche|search|trouve|بحث)\s+(?:sur\s+youtube\s+)?(.+)\s+(?:sur\s+)?youtube/);
+  const ytSearch2 = t.match(/youtube\s+(?:cherche|search|trouve|بحث)\s+(.+)/);
+  const ytMatch = ytSearch || ytSearch2;
+  if (ytMatch) {
+    const q = encodeURIComponent((ytMatch[1] || '').trim());
+    return { type: 'open_url', url: `https://www.youtube.com/search?q=${q}` };
+  }
+
   // Common websites — direct
   const sites = {
     youtube: 'https://youtube.com',
