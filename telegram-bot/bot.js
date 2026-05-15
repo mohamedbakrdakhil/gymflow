@@ -1,127 +1,46 @@
 /**
- * GymFlow Telegram Remote Controller — version intelligente
- * Comprend le français, le darija et l'anglais
+ * GymFlow Telegram Bot — Claude Code Remote Controller
+ * Messages → Claude Code → Réponses → Telegram
  */
 const TelegramBot = require('node-telegram-bot-api');
 const { spawn } = require('child_process');
+const fs = require('fs');
 const path = require('path');
 
 const TOKEN = process.env.TELEGRAM_TOKEN;
 if (!TOKEN) { console.error('❌ TELEGRAM_TOKEN manquant'); process.exit(1); }
 
+const INBOX  = '/tmp/gymflow_inbox.txt';
+const OUTBOX = '/tmp/gymflow_outbox.txt';
+const ROOT   = path.join(__dirname, '..');
+
 const bot = new TelegramBot(TOKEN, { polling: true });
-const ROOT = path.join(__dirname, '..');
 const procs = {};
 
-// ─── Keyboard ────────────────────────────────────────────────────────────────
+// ensure files exist
+fs.writeFileSync(INBOX,  '', { flag: 'a' });
+fs.writeFileSync(OUTBOX, '', { flag: 'a' });
 
-const KEYBOARD = {
+// ─── Keyboard ─────────────────────────────────────────────────────────────────
+
+const KB = {
   reply_markup: {
     keyboard: [
       ['⚡ Start Frontend', '🔧 Start Backend'],
-      ['⛔ Stop Frontend', '⛔ Stop Backend'],
-      ['🛑 Stop Tout', '📊 Status'],
+      ['⛔ Stop Tout', '📊 Status'],
       ['🗄️ Sync DB', '🌱 Seed DB'],
-      ['📋 Git Status', '📜 Git Log'],
-      ['⬇️ Git Pull', '🔍 Git Diff'],
-      ['❓ Aide'],
+      ['📋 Git Status', '⬇️ Git Pull'],
+      ['🤖 Claude — commande libre'],
     ],
     resize_keyboard: true,
   },
 };
 
-// ─── Intent detection ────────────────────────────────────────────────────────
+// ─── Shell runner ─────────────────────────────────────────────────────────────
 
-function detectIntent(text) {
-  const t = text.toLowerCase().trim();
-
-  // Greetings
-  if (/^(salut|hello|hi|salam|bonjour|ola|hey|cava|ça va|كيداير|labas)/.test(t))
-    return 'greeting';
-
-  // Start frontend
-  if (/(start|lance|dkhl|ftech|ouvre|open|démarre|شغل).*(front|site|web|vite|ui|interface)/.test(t) ||
-      /(front|site|web|vite).*(start|lance|dkhl|run|شغل)/.test(t) ||
-      t === 'frontend' || t === 'start frontend' || t === '⚡ start frontend')
-    return 'start_frontend';
-
-  // Start backend
-  if (/(start|lance|dkhl|ftech|démarre|شغل).*(back|server|api|node|serveur)/.test(t) ||
-      /(back|server|api|node).*(start|lance|run|شغل)/.test(t) ||
-      t === 'backend' || t === 'start backend' || t === '🔧 start backend')
-    return 'start_backend';
-
-  // Start both
-  if (/(start|lance|démarre|شغل).*(tout|all|les deux|كلشي)/.test(t) ||
-      /(tout|all|كلشي).*(start|lance|شغل)/.test(t))
-    return 'start_all';
-
-  // Stop frontend
-  if (/(stop|wqef|arret|kill|arrête|وقف).*(front|site|web|vite)/.test(t) ||
-      t === '⛔ stop frontend')
-    return 'stop_frontend';
-
-  // Stop backend
-  if (/(stop|wqef|arret|kill|arrête|وقف).*(back|server|api|node)/.test(t) ||
-      t === '⛔ stop backend')
-    return 'stop_backend';
-
-  // Stop all
-  if (/^(stop|wqef|arret|arrête|وقف)$/.test(t) ||
-      /(stop|wqef|arrête).*(tout|all|كلشي)/.test(t) ||
-      t === '🛑 stop tout')
-    return 'stop_all';
-
-  // Status
-  if (/(status|état|statut|حال|kif|kifash|running|actif|marche)/.test(t) ||
-      t === '📊 status')
-    return 'status';
-
-  // Git status
-  if (/(git status|git stat|changes|modif)/.test(t) || t === '📋 git status')
-    return 'git_status';
-
-  // Git log
-  if (/(git log|historique|commits|log)/.test(t) || t === '📜 git log')
-    return 'git_log';
-
-  // Git pull
-  if (/(git pull|pull|sync|synchronis|mise.?à.?jour|update)/.test(t) || t === '⬇️ git pull')
-    return 'git_pull';
-
-  // Git diff
-  if (/(git diff|diff|differences|changements)/.test(t) || t === '🔍 git diff')
-    return 'git_diff';
-
-  // DB sync
-  if (/(sync.?db|db.?sync|synchronis.*base|base.*sync)/.test(t) || t === '🗄️ sync db')
-    return 'db_sync';
-
-  // DB seed
-  if (/(seed|données.?test|fake.?data|data.*seed)/.test(t) || t === '🌱 seed db')
-    return 'db_seed';
-
-  // DB reset
-  if (/(reset.?db|db.?reset|supprime.*base|recré.*base)/.test(t))
-    return 'db_reset';
-
-  // Help
-  if (/(aide|help|quoi|comment|commandes|menu|كيفاش|shniya|شنية)/.test(t) || t === '❓ aide')
-    return 'help';
-
-  // Logs
-  if (/(log|sortie|output|affiche|montre|show)/.test(t))
-    return 'show_logs';
-
-  return 'unknown';
-}
-
-// ─── Run shell command ────────────────────────────────────────────────────────
-
-function runCommand(chatId, procId, cmd, cwd) {
+function runShell(chatId, procId, cmd, cwd) {
   if (procs[procId]) { procs[procId].kill('SIGTERM'); delete procs[procId]; }
-
-  bot.sendMessage(chatId, `▶ *${procId}*`, { parse_mode: 'Markdown', ...KEYBOARD.reply_markup ? { reply_markup: KEYBOARD.reply_markup } : {} });
+  bot.sendMessage(chatId, `▶ \`${procId}\``, { parse_mode: 'Markdown', reply_markup: KB.reply_markup });
 
   const shell = spawn('bash', ['-c', cmd], {
     cwd: cwd ? path.join(ROOT, cwd) : ROOT,
@@ -129,69 +48,91 @@ function runCommand(chatId, procId, cmd, cwd) {
   });
   procs[procId] = shell;
 
-  let buffer = '';
-  let timer = null;
-
+  let buf = '', timer;
   const flush = () => {
-    const clean = buffer.replace(/\x1b\[[0-9;]*m/g, '').trim();
-    if (clean) bot.sendMessage(chatId, '```\n' + clean.slice(0, 3800) + '\n```', { parse_mode: 'Markdown', reply_markup: KEYBOARD.reply_markup });
-    buffer = '';
+    const out = buf.replace(/\x1b\[[0-9;]*m/g, '').trim();
+    if (out) bot.sendMessage(chatId, '```\n' + out.slice(0, 3500) + '\n```', { parse_mode: 'Markdown', reply_markup: KB.reply_markup });
+    buf = '';
   };
-
-  const collect = (d) => {
-    buffer += d.toString();
-    clearTimeout(timer);
-    timer = setTimeout(flush, 900);
-  };
+  const collect = d => { buf += d; clearTimeout(timer); timer = setTimeout(flush, 900); };
 
   shell.stdout.on('data', collect);
   shell.stderr.on('data', collect);
-  shell.on('close', (code) => {
-    clearTimeout(timer);
-    flush();
+  shell.on('close', code => {
+    clearTimeout(timer); flush();
     setTimeout(() => {
-      bot.sendMessage(chatId, code === 0 ? '✅ Terminé !' : `❌ Erreur (exit ${code})`, { reply_markup: KEYBOARD.reply_markup });
+      bot.sendMessage(chatId, code === 0 ? '✅ Terminé !' : `❌ Exit ${code}`, { reply_markup: KB.reply_markup });
       delete procs[procId];
     }, 1000);
   });
 }
 
+// ─── Poll outbox — Claude's responses ────────────────────────────────────────
+
+let lastOutboxSize = 0;
+
+function pollOutbox(chatId) {
+  setInterval(() => {
+    try {
+      const content = fs.readFileSync(OUTBOX, 'utf8');
+      if (content.length > lastOutboxSize) {
+        const newContent = content.slice(lastOutboxSize).trim();
+        lastOutboxSize = content.length;
+        if (newContent && chatId) {
+          // Split by delimiter and send each chunk
+          const parts = newContent.split('<<<END>>>').filter(p => p.trim());
+          parts.forEach(part => {
+            bot.sendMessage(chatId, part.trim(), { reply_markup: KB.reply_markup, parse_mode: 'Markdown' })
+              .catch(() => bot.sendMessage(chatId, part.trim(), { reply_markup: KB.reply_markup }));
+          });
+        }
+      }
+    } catch (_) {}
+  }, 1000);
+}
+
+// ─── Intent detection ────────────────────────────────────────────────────────
+
+function detectIntent(text) {
+  const t = text.toLowerCase().trim();
+  if (/^(salut|hello|hi|salam|bonjour|ola|hey|كيداير|labas|cava)/.test(t)) return 'greeting';
+  if (/(start|lance|dkhl|شغل).*(front|site|web|vite)/.test(t) || t === '⚡ start frontend') return 'start_frontend';
+  if (/(start|lance|dkhl|شغل).*(back|server|api|node)/.test(t) || t === '🔧 start backend') return 'start_backend';
+  if (/(stop|wqef|arrête|وقف|kill)/.test(t) || t === '⛔ stop tout') return 'stop_all';
+  if (/(status|حال|marche|actif|running)/.test(t) || t === '📊 status') return 'status';
+  if (/(git status|git stat)/.test(t) || t === '📋 git status') return 'git_status';
+  if (/(git pull|pull|sync code|mise.?à.?jour)/.test(t) || t === '⬇️ git pull') return 'git_pull';
+  if (/(sync.?db|db.?sync)/.test(t) || t === '🗄️ sync db') return 'db_sync';
+  if (/(seed|données.?test)/.test(t) || t === '🌱 seed db') return 'db_seed';
+  if (/(aide|help|quoi faire|commandes|menu)/.test(t)) return 'help';
+  if (t === '🤖 claude — commande libre') return 'claude_mode';
+  return 'claude'; // tout le reste → Claude Code
+}
+
 // ─── Message handler ─────────────────────────────────────────────────────────
 
-bot.on('message', (msg) => {
+let activeChatId = null;
+let claudeMode = false;
+
+bot.on('message', msg => {
   const chatId = msg.chat.id;
-  const text = msg.text || '';
+  const text = (msg.text || '').trim();
+  if (!activeChatId) { activeChatId = chatId; pollOutbox(chatId); }
+
+  const reply = t => bot.sendMessage(chatId, t, KB);
   const intent = detectIntent(text);
 
-  const reply = (t) => bot.sendMessage(chatId, t, KEYBOARD);
-
   switch (intent) {
-
     case 'greeting':
-      reply(`👋 Salut ! Je suis le remote controller de GymFlow.\n\nUtilise les boutons en bas, ou écris par exemple :\n• "lance le site"\n• "stop tout"\n• "git status"\n• "sync db"`);
+      reply(`👋 Salam ! Je suis ton remote controller GymFlow.\n\n🤖 *Mode Claude* : appuie sur le bouton "Claude — commande libre" ou écris directement ce que tu veux que je fasse :\n• "zid login page"\n• "sali bug dial dashboard"\n• "chouf le code de MembersList"\n• "start le site"\n\nJe comprends le darija, français et anglais !`);
       break;
 
     case 'start_frontend':
-      runCommand(chatId, 'frontend', 'cd frontend && npm run dev -- --host 0.0.0.0 --port 5173', '');
+      runShell(chatId, 'frontend', 'cd frontend && npm run dev -- --host 0.0.0.0 --port 5173', '');
       break;
 
     case 'start_backend':
-      runCommand(chatId, 'backend', 'cd backend && npm run dev', '');
-      break;
-
-    case 'start_all':
-      runCommand(chatId, 'frontend', 'cd frontend && npm run dev -- --host 0.0.0.0 --port 5173', '');
-      setTimeout(() => runCommand(chatId, 'backend', 'cd backend && npm run dev', ''), 2000);
-      break;
-
-    case 'stop_frontend':
-      if (procs['frontend']) { procs['frontend'].kill('SIGTERM'); delete procs['frontend']; }
-      reply('⛔ Frontend arrêté');
-      break;
-
-    case 'stop_backend':
-      if (procs['backend']) { procs['backend'].kill('SIGTERM'); delete procs['backend']; }
-      reply('⛔ Backend arrêté');
+      runShell(chatId, 'backend', 'cd backend && npm run dev', '');
       break;
 
     case 'stop_all':
@@ -206,53 +147,42 @@ bot.on('message', (msg) => {
     }
 
     case 'git_status':
-      runCommand(chatId, 'git', 'git status', '');
-      break;
-
-    case 'git_log':
-      runCommand(chatId, 'git', 'git log --oneline -15', '');
+      runShell(chatId, 'git', 'git status', '');
       break;
 
     case 'git_pull':
-      runCommand(chatId, 'git', 'git pull origin claude/check-website-K7ljp', '');
-      break;
-
-    case 'git_diff':
-      runCommand(chatId, 'git', 'git diff --stat', '');
+      runShell(chatId, 'git', 'git pull origin claude/check-website-K7ljp', '');
       break;
 
     case 'db_sync':
-      runCommand(chatId, 'db-sync', 'cd backend && npm run db:sync', '');
+      runShell(chatId, 'db', 'cd backend && npm run db:sync', '');
       break;
 
     case 'db_seed':
-      runCommand(chatId, 'db-seed', 'cd backend && npm run db:seed', '');
+      runShell(chatId, 'db', 'cd backend && npm run db:seed', '');
       break;
 
-    case 'db_reset':
-      reply('⚠️ Tu es sûr ? Réponds "oui reset db" pour confirmer');
-      break;
-
-    case 'show_logs':
-      reply(Object.keys(procs).length
-        ? `📊 Processus actifs : ${Object.keys(procs).join(', ')}\nLes logs arrivent en temps réel dans ce chat.`
-        : '😴 Aucun processus actif. Lance un serveur d\'abord.');
+    case 'claude_mode':
+      claudeMode = true;
+      reply('🤖 Mode Claude activé ! Écris ce que tu veux que je fasse — je vais le recevoir et exécuter directement.');
       break;
 
     case 'help':
-      reply(`🎮 *GymFlow Remote*\n\n*Boutons disponibles :*\n⚡ Start Frontend — lance le site web\n🔧 Start Backend — lance l'API\n⛔ Stop — arrête un serveur\n🛑 Stop Tout — tout arrêter\n📊 Status — processus actifs\n🗄️ Sync DB — sync base de données\n🌱 Seed DB — données de test\n📋 Git Status / Log / Pull / Diff\n\n*Ou écris en français/darija :*\n"lance le site", "stop tout", "sync db", "git pull"...`);
+      reply(`🎮 *GymFlow Remote*\n\n*Boutons :*\n⚡ Start Frontend\n🔧 Start Backend\n⛔ Stop Tout\n📊 Status\n🗄️ Sync DB / 🌱 Seed DB\n📋 Git Status / ⬇️ Git Pull\n\n*Mode Claude 🤖 :*\nÉcris n'importe quelle instruction en darija/français/anglais et Claude l'exécute :\n"zid une page contact"\n"sali bug dial login"\n"chouf les erreurs"\n"refactor MembersList"`);
       break;
 
+    case 'claude':
     default:
-      // Commande spéciale confirmée
-      if (text.toLowerCase() === 'oui reset db') {
-        runCommand(chatId, 'db-reset', 'cd backend && npm run db:reset', '');
-        return;
-      }
-      reply(`🤔 Je n'ai pas compris "${text}".\n\nEssaie les boutons du menu, ou écris :\n• "lance le site"\n• "stop tout"\n• "git status"\n• "aide" pour la liste complète`);
+      // Forward to Claude Code via inbox file
+      bot.sendMessage(chatId, `📨 Message envoyé à Claude...\n\n_"${text}"_`, { parse_mode: 'Markdown', reply_markup: KB.reply_markup });
+      const entry = `[${new Date().toISOString()}] CHATID:${chatId} MSG:${text}\n`;
+      fs.appendFileSync(INBOX, entry);
+      break;
   }
 });
 
-bot.on('polling_error', (err) => console.error('Polling error:', err.message));
+bot.on('polling_error', err => console.error('Polling error:', err.message));
 
-console.log('\n🤖 GymFlow Bot démarré — version intelligente\n');
+console.log('\n🤖 GymFlow Bot — Mode Claude Remote\n');
+console.log(`   Inbox:  ${INBOX}`);
+console.log(`   Outbox: ${OUTBOX}\n`);
