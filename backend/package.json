@@ -12,7 +12,13 @@
     "db:reset": "node src/utils/db-sync.js --force && node src/seeders/index.js",
     "lint": "eslint src --ext .js"
   },
-  "keywords": ["saas", "gym", "fitness", "morocco", "multi-tenant"],
+  "keywords": [
+    "saas",
+    "gym",
+    "fitness",
+    "morocco",
+    "multi-tenant"
+  ],
   "author": "GymFlow",
   "license": "UNLICENSED",
   "dependencies": {
@@ -32,6 +38,7 @@
     "pdfkit": "^0.15.0",
     "qrcode": "^1.5.4",
     "sequelize": "^6.37.3",
+    "sqlite3": "^6.0.1",
     "uuid": "^10.0.0",
     "winston": "^3.13.1"
   },
